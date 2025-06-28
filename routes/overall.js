@@ -204,10 +204,7 @@ router.get('/quarterly', async (req, res) => {
 });
 router.get('/monthly', async (req, res) => {
   try {
-    const { bu = 'all', area = 'all', channel = 'all' } = req.query;
-    console.log('Filter BU:', bu, '| Area:', area, '| Channel:', channel);
-
-    let paramIndex = 1;
+    const { bu = 'all', area_code = 'all', department_code = 'all' } = req.query;
     const params = [];
 
     const channelMap = (channelName) => {
@@ -221,23 +218,15 @@ router.get('/monthly', async (req, res) => {
     };
 
     const buildCondition = (value, column) => {
-      if (value.toLowerCase() === 'all') return '';
+      if (!value || value.toLowerCase() === 'all') return '';
       params.push(value);
-      return `AND ${column} = $${paramIndex++}`;
+      return `AND ${column} = $${params.length}`;
     };
 
-    const buCond = buildCondition(bu, 'bu');
-    const areaCond = buildCondition(area, 'area_code');
+    const buCond = buildCondition(bu, 'bu_code');
+    const areaCond = buildCondition(area_code, 'area_code');
+    const departmentCond = buildCondition(department_code, 'department_code');
 
-    let departmentCond = '';
-    if (channel.toLowerCase() !== 'all') {
-      const deptCode = mapChannelNameToDepartmentCode(channel);
-      if (deptCode) {
-        params.push(deptCode);
-        departmentCond = `AND department_code LIKE $${paramIndex++}`;
-      }
-    }
-    console.log(departmentCond)
     const targetConditions = `
       WHERE year_part = '2025'
       ${buCond}
@@ -259,8 +248,8 @@ router.get('/monthly', async (req, res) => {
             WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
             ELSE 'ບໍ່ຮູ້ຈັກ'
           END AS channel_name,
-          SUM(target_amount) AS target
-        FROM odg_target  WHERE year_part = '2025'   AND ($1::text IS NULL OR bu = $1)AND ($1::text IS NULL OR area_code = $1) and channel_name
+          SUM(targat_amount) AS target
+        FROM odg_target  WHERE year_part = '2025'   AND ($1::text IS NULL OR bu = $1)AND ($1::text IS NULL OR area_code = $1)
         GROUP BY 
           month_part,
           CASE 
@@ -911,7 +900,7 @@ router.get('/top-products', async (req, res) => {
   const filter = req.query.filter || 'month';
   const zone = req.query.zone || 'all';
   const bu = req.query.bu || 'all';
-console.log('Filter:', filter, 'Zone:', zone, 'BU:', bu);
+  console.log('Filter:', filter, 'Zone:', zone, 'BU:', bu);
   let conditions = [];
   let params = [];
 
@@ -1584,7 +1573,7 @@ ORDER BY code;
     res.status(500).json({ message: 'Internal server error' });
   }
 });
- 
+
 
 // 🚀 API endpoint to fetch BU data
 router.get('/bu-list', async (req, res) => {
