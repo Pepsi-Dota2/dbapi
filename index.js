@@ -47,6 +47,13 @@ app.use('/pos', customerRoutes);
 app.use('/pos', warehouseRoutes);
 app.use('/pos', posRoutes);
 
+
+
+
+// PMS Routes
+const pmsRoutes = require('./routes/pms/pms');
+app.use('/api/pms', pmsRoutes);
+
 // Hello Test Route
 const authodsRoutes = require('./routes/ods/auth');
 app.use('/api/ods', authodsRoutes);
