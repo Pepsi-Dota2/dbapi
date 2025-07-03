@@ -10,20 +10,27 @@ let onlineUsers = {}; // user_id: { socketId, username }
 router.post('/saledblogin', async (req, res) => {
   const { username, password, device_id } = req.body;
   console.log('Login attempt:', { username, device_id });
+
   if (!username || !password || !device_id) {
     return res.status(400).json({ message: 'Missing login data' });
   }
 
   try {
     const result = await pool.query(
-      `SELECT id, username, password, role, device_id FROM users_db WHERE username = $1 AND password = $2`,
+      `SELECT id, username, password, role, device_id, bu FROM users_db WHERE username = $1 AND password = $2`,
       [username, password]
     );
-    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+
+    if (result.rows.length === 0)
+      return res.status(404).json({ message: 'User not found' });
+
     const user = result.rows[0];
 
     if (!user.device_id) {
-      await pool.query(`UPDATE users_db SET device_id = $1 WHERE username = $2`, [device_id, username]);
+      await pool.query(
+        `UPDATE users_db SET device_id = $1 WHERE username = $2`,
+        [device_id, username]
+      );
     }
 
     const token = jwt.sign(
@@ -33,17 +40,32 @@ router.post('/saledblogin', async (req, res) => {
     );
 
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
     await pool.query(
       `INSERT INTO login_logs_saledb (user_id, username, device_id, ip_address, login_time) VALUES ($1, $2, $3, $4, NOW())`,
       [user.id, user.username, device_id, ip]
     );
-    await pool.query(`UPDATE users_db SET device_id = $1, last_login = NOW() WHERE username = $2`, [device_id, username]);
-    res.status(200).json({ message: 'Login successful', role: user.role, token, user_id: user.id, username: user.username });
+
+    await pool.query(
+      `UPDATE users_db SET device_id = $1, last_login = NOW() WHERE username = $2`,
+      [device_id, username]
+    );
+
+    res.status(200).json({
+      message: 'Login successful',
+      role: user.role,
+      token,
+      user_id: user.id,
+      username: user.username,
+      bu: user.bu 
+    });
+
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
+
 
 // 🛡 Token Verification Middleware
 function verifyToken(req, res, next) {
