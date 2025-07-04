@@ -671,7 +671,7 @@ WHERE a.account_status = 1
   AND a.user_created IN (
     SELECT code FROM erp_user WHERE bu_code = $1
   );
-
+  
   `;
 
   try {

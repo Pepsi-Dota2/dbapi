@@ -204,36 +204,8 @@ router.get('/quarterly', async (req, res) => {
 });
 router.get('/monthly', async (req, res) => {
   try {
-    const { bu = 'all', area_code = 'all', department_code = 'all' } = req.query;
-    const params = [];
-
-    const channelMap = (channelName) => {
-      switch (channelName) {
-        case 'ຂາຍໜ້າຮ້ານ': return '%1';
-        case 'ຂາຍສົ່ງ': return '%2';
-        case 'ຂາຍໂຄງການ': return '%3';
-        case 'ຂາຍຊ່າງ': return '%4';
-        default: return null;
-      }
-    };
-
-    const buildCondition = (value, column) => {
-      if (!value || value.toLowerCase() === 'all') return '';
-      params.push(value);
-      return `AND ${column} = $${params.length}`;
-    };
-
-    const buCond = buildCondition(bu, 'bu_code');
-    const areaCond = buildCondition(area_code, 'area_code');
-    const departmentCond = buildCondition(department_code, 'department_code');
-
-    const targetConditions = `
-      WHERE year_part = '2025'
-      ${buCond}
-      ${areaCond}
-      ${departmentCond}
-    `;
-
+    const { bu = 'all', area = 'all', channel = 'all' } = req.query;
+    console.log('Filter BU:', bu, '| Area:', area, '| Channel:', channel);
     const query = `
       WITH months AS (
         SELECT generate_series(1, 12) AS month
@@ -241,76 +213,41 @@ router.get('/monthly', async (req, res) => {
       target_by_month AS (
         SELECT 
           month_part::int AS month,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END AS channel_name,
           SUM(targat_amount) AS target
-        FROM odg_target  WHERE year_part = '2025'   AND ($1::text IS NULL OR bu = $1)AND ($1::text IS NULL OR area_code = $1)
-        GROUP BY 
-          month_part,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END
+        FROM odg_target
+        WHERE year_part = '2025'
+          AND ($1 = 'all' OR bu = $1) and ($2 = 'all' OR area_code = $2) 
+        AND (
+          $3 = 'all' OR 
+          (
+            CASE 
+              WHEN department_code LIKE '%2' THEN 'ຂາຍໜ້າຮ້ານ'
+              WHEN department_code LIKE '%1' THEN 'ຂາຍສົ່ງ'
+              WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
+              WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
+              ELSE NULL
+            END
+          ) = $3
+        )
+        GROUP BY month_part
       ),
       current_year_revenue AS (
         SELECT 
           monthdoc AS month,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END AS channel_name,
           SUM(sum_amount) AS revenue
         FROM odg_sale_detail
         WHERE yeardoc = 2025
-        ${buCond}
-        ${areaCond}
-        ${departmentCond}
-        GROUP BY 
-          monthdoc,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END
+          AND ($1 = 'all' OR bu_code = $1)  and ($2 = 'all' OR area_code = $2) and ($3 = 'all' OR channel_name = $3)
+        GROUP BY monthdoc
       ),
       last_year_revenue AS (
         SELECT 
           monthdoc AS month,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END AS channel_name,
           SUM(sum_amount) AS revenue
         FROM odg_sale_detail
         WHERE yeardoc = 2024
-        ${buCond}
-        ${areaCond}
-        ${departmentCond}
-        GROUP BY 
-          monthdoc,
-          CASE 
-            WHEN department_code LIKE '%1' THEN 'ຂາຍໜ້າຮ້ານ'
-            WHEN department_code LIKE '%2' THEN 'ຂາຍສົ່ງ'
-            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
-            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
-            ELSE 'ບໍ່ຮູ້ຈັກ'
-          END
+          AND ($1 = 'all' OR bu_code = $1) and ($2 = 'all' OR area_code = $2) and ($3 = 'all' OR channel_name = $3)
+        GROUP BY monthdoc
       )
       SELECT 
         m.month,
@@ -319,12 +256,12 @@ router.get('/monthly', async (req, res) => {
         COALESCE(l.revenue, 0) AS last_year
       FROM months m
       LEFT JOIN target_by_month t ON m.month = t.month
-      LEFT JOIN current_year_revenue c ON m.month = c.month AND t.channel_name = c.channel_name
-      LEFT JOIN last_year_revenue l ON m.month = l.month AND COALESCE(t.channel_name, c.channel_name) = l.channel_name
+      LEFT JOIN current_year_revenue c ON m.month = c.month
+      LEFT JOIN last_year_revenue l ON m.month = l.month
       ORDER BY m.month;
     `;
 
-    const result = await pool.query(query, params);
+    const result = await pool.query(query, [bu, area, channel]);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching monthly sales:', err);
