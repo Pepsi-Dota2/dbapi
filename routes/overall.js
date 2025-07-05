@@ -143,27 +143,10 @@ bu_summary AS (
 router.get('/quarterly', async (req, res) => {
   const bu = req.query.bu || 'all';
   const area = req.query.area || 'all';
-  const isFilterBU = bu.toLowerCase() !== 'all';
-  const isFilterArea = area.toLowerCase() !== 'all';
+  const channel = req.query.channel || 'all';
 
   try {
-    let params = [];
-    let targetWhere = "year_part = '2025'";
-    let revenueWhere = "yeardoc = '2025'";
-    let lastYearWhere = "yeardoc = '2024'";
-
-    if (isFilterBU) {
-      params.push(bu);
-      targetWhere += ` AND bu = $${params.length}`;
-      revenueWhere += ` AND bu_code = $${params.length}`;
-      lastYearWhere += ` AND bu_code = $${params.length}`;
-    }
-    if (isFilterArea) {
-      params.push(area);
-      targetWhere += ` AND area_code = $${params.length}`;
-      revenueWhere += ` AND area_code = $${params.length}`;
-      lastYearWhere += ` AND area_code = $${params.length}`;
-    }
+    let params = [bu, area, channel];
 
     const query = `
       SELECT 'Q' || quarter_num AS quarter,
@@ -171,23 +154,52 @@ router.get('/quarterly', async (req, res) => {
              COALESCE(SUM(revenue), 0) AS revenue,
              COALESCE(SUM(last_year), 0) AS last_year
       FROM (
-        SELECT CEIL(month_part::int / 3.0) AS quarter_num, SUM(targat_amount) AS target, 0 AS revenue, 0 AS last_year
+        SELECT CEIL(month_part::int / 3.0) AS quarter_num,
+               SUM(targat_amount) AS target,
+               0 AS revenue,
+               0 AS last_year
         FROM odg_target
-        WHERE ${targetWhere}
+        WHERE year_part = '2025'
+          AND ($1 = 'all' OR bu = $1)
+          AND ($2 = 'all' OR area_code = $2)
+          AND (
+            $3 = 'all' OR (
+              CASE 
+                WHEN department_code LIKE '%2' THEN 'ຂາຍໜ້າຮ້ານ'
+                WHEN department_code LIKE '%1' THEN 'ຂາຍສົ່ງ'
+                WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
+                WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
+                ELSE NULL
+              END
+            ) = $3
+          )
         GROUP BY CEIL(month_part::int / 3.0)
 
         UNION ALL
 
-        SELECT EXTRACT(QUARTER FROM doc_date) AS quarter_num, 0 AS target, SUM(sum_amount) AS revenue, 0 AS last_year
+        SELECT EXTRACT(QUARTER FROM doc_date) AS quarter_num,
+               0 AS target,
+               SUM(sum_amount) AS revenue,
+               0 AS last_year
         FROM odg_sale_detail
-        WHERE ${revenueWhere}
+        WHERE yeardoc = '2025'
+          AND ($1 = 'all' OR bu_code = $1)
+          AND ($2 = 'all' OR area_code = $2)
+          AND ($3 = 'all' OR channel_name = $3)
         GROUP BY EXTRACT(QUARTER FROM doc_date)
 
         UNION ALL
 
-        SELECT EXTRACT(QUARTER FROM doc_date) AS quarter_num, 0 AS target, 0 AS revenue, SUM(sum_amount) AS last_year
+        -- 🔙 Revenue for last year
+        SELECT EXTRACT(QUARTER FROM doc_date) AS quarter_num,
+               0 AS target,
+               0 AS revenue,
+               SUM(sum_amount) AS last_year
         FROM odg_sale_detail
-        WHERE ${lastYearWhere}
+        WHERE yeardoc = '2024'
+          AND ($1 = 'all' OR bu_code = $1)
+          AND ($2 = 'all' OR area_code = $2)
+          AND ($3 = 'all' OR channel_name = $3)
         GROUP BY EXTRACT(QUARTER FROM doc_date)
       ) AS combined
       GROUP BY quarter_num
@@ -196,12 +208,12 @@ router.get('/quarterly', async (req, res) => {
 
     const result = await pool.query(query, params);
     res.json(result.rows);
-
   } catch (err) {
     console.error('Error fetching quarterly sales:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
+
 router.get('/monthly', async (req, res) => {
   try {
     const { bu = 'all', area = 'all', channel = 'all' } = req.query;
@@ -276,61 +288,101 @@ router.get('/accumulated', async (req, res) => {
   const client = await pool.connect();
   try {
     const bu = req.query.bu || 'all';
+    const channel = req.query.channel || 'all';
+    const area = req.query.area || 'all';
+
     const isFilterBU = bu.toLowerCase() !== 'all';
+    const isFilterChannel = channel.toLowerCase() !== 'all';
+    const isFilterArea = area.toLowerCase() !== 'all';
 
-    // query
+    const params = [];
+    let paramIndex = 1;
+
+    // Dynamic WHERE clauses
+    const buTargetWhere = isFilterBU ? `AND bu = $${paramIndex++}` : '';
+    const buRevenueWhere = isFilterBU ? `AND bu_code = $${paramIndex++}` : '';
+
+    const channelTargetWhere = isFilterChannel
+      ? `AND (
+          CASE 
+            WHEN department_code LIKE '%2' THEN 'ຂາຍໜ້າຮ້ານ'
+            WHEN department_code LIKE '%1' THEN 'ຂາຍສົ່ງ'
+            WHEN department_code LIKE '%3' THEN 'ຂາຍໂຄງການ'
+            WHEN department_code LIKE '%4' THEN 'ຂາຍຊ່າງ'
+            ELSE NULL
+          END
+        ) = $${paramIndex++}`
+      : '';
+
+    const channelRevenueWhere = isFilterChannel ? `AND channel_name = $${paramIndex++}` : '';
+
+    const areaTargetWhere = isFilterArea ? `AND area_code = $${paramIndex++}` : '';
+    const areaRevenueWhere = isFilterArea ? `AND area_code = $${paramIndex++}` : '';
+    const areaLastYearWhere = isFilterArea ? `AND area_code = $${paramIndex++}` : '';
+
+    if (isFilterBU) params.push(bu);
+    if (isFilterBU) params.push(bu);
+    if (isFilterChannel) params.push(channel);
+    if (isFilterChannel) params.push(channel);
+    if (isFilterArea) params.push(area);
+    if (isFilterArea) params.push(area);
+
     const query = `
-            WITH target_by_month AS (
-                SELECT 
-                    month_part::int AS month,
-                    SUM(targat_amount) AS target
-                FROM odg_target
-                WHERE year_part = '2025'
-                ${isFilterBU ? `AND bu = $1` : ''}
-                GROUP BY month_part
-            ),
-            current_year_revenue AS (
-                SELECT 
-                    monthdoc AS month,
-                    SUM(sum_amount) AS revenue
-                FROM odg_sale_detail
-                WHERE yeardoc = EXTRACT(YEAR FROM CURRENT_DATE)::int
-                ${isFilterBU ? `AND bu_code = $1` : ''}
-                GROUP BY monthdoc
-            ),
-            last_year_revenue AS (
-                SELECT 
-                    monthdoc AS month,
-                    SUM(sum_amount) AS last_year
-                FROM odg_sale_detail
-                WHERE yeardoc = (EXTRACT(YEAR FROM CURRENT_DATE)::int - 1)
-                ${isFilterBU ? `AND bu_code = $1` : ''}
-                GROUP BY monthdoc
-            ),
-            combined_data AS (
-                SELECT m.month,
-                    COALESCE(t.target, 0) AS target,
-                    COALESCE(c.revenue, 0) AS revenue,
-                    COALESCE(l.last_year, 0) AS last_year
-                FROM (
-                    SELECT generate_series(1,12) AS month
-                ) m
-                LEFT JOIN target_by_month t ON m.month = t.month
-                LEFT JOIN current_year_revenue c ON m.month = c.month
-                LEFT JOIN last_year_revenue l ON m.month = l.month
-            )
-            SELECT 
-                month,
-                SUM(target) OVER (ORDER BY month) AS accumulated_target,
-                SUM(revenue) OVER (ORDER BY month) AS accumulated_revenue,
-                SUM(last_year) OVER (ORDER BY month) AS accumulated_last_year
-            FROM combined_data
-            ORDER BY month;
-        `;
+      WITH target_by_month AS (
+        SELECT 
+          month_part::int AS month,
+          SUM(targat_amount) AS target
+        FROM odg_target
+        WHERE year_part = '2025'
+        ${buTargetWhere}
+        ${channelTargetWhere}
+        ${areaTargetWhere}
+        GROUP BY month_part
+      ),
+      current_year_revenue AS (
+        SELECT 
+          monthdoc AS month,
+          SUM(sum_amount) AS revenue
+        FROM odg_sale_detail
+        WHERE yeardoc = EXTRACT(YEAR FROM CURRENT_DATE)::int
+        ${buRevenueWhere}
+        ${channelRevenueWhere}
+        ${areaRevenueWhere}
+        GROUP BY monthdoc
+      ),
+      last_year_revenue AS (
+        SELECT 
+          monthdoc AS month,
+          SUM(sum_amount) AS last_year
+        FROM odg_sale_detail
+        WHERE yeardoc = (EXTRACT(YEAR FROM CURRENT_DATE)::int - 1)
+        ${buRevenueWhere}
+        ${channelRevenueWhere}
+        ${areaLastYearWhere}
+        GROUP BY monthdoc
+      ),
+      combined_data AS (
+        SELECT m.month,
+               COALESCE(t.target, 0) AS target,
+               COALESCE(c.revenue, 0) AS revenue,
+               COALESCE(l.last_year, 0) AS last_year
+        FROM (
+          SELECT generate_series(1, 12) AS month
+        ) m
+        LEFT JOIN target_by_month t ON m.month = t.month
+        LEFT JOIN current_year_revenue c ON m.month = c.month
+        LEFT JOIN last_year_revenue l ON m.month = l.month
+      )
+      SELECT 
+        month,
+        SUM(target) OVER (ORDER BY month) AS accumulated_target,
+        SUM(revenue) OVER (ORDER BY month) AS accumulated_revenue,
+        SUM(last_year) OVER (ORDER BY month) AS accumulated_last_year
+      FROM combined_data
+      ORDER BY month;
+    `;
 
-    const params = isFilterBU ? [bu] : [];
     const result = await client.query(query, params);
-    console.log('Accumulated data:', result.rows);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching accumulated monthly data:', err);
@@ -339,6 +391,8 @@ router.get('/accumulated', async (req, res) => {
     client.release();
   }
 });
+
+
 
 
 router.get('/bu-summary', async (req, res) => {
@@ -492,6 +546,30 @@ router.get('/top-customers', async (req, res) => {
 
 router.get('/channel-summary', async (req, res) => {
   const filter = req.query.filter || 'thisMonth';
+  const bu = req.query.bu || 'all';
+  const channel = req.query.channel || 'all';
+  const area = req.query.area || 'all';
+
+  const params = [];
+  let index = 1;
+
+  const conditions = [];
+
+  if (bu !== 'all') {
+    conditions.push(`bu_code = $${index++}`);
+    params.push(bu);
+  }
+  if (channel !== 'all') {
+    conditions.push(`channel_name = $${index++}`);
+    params.push(channel);
+  }
+  if (area !== 'all') {
+    conditions.push(`area_code = $${index++}`);
+    params.push(area);
+  }
+
+  const whereClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+
   let query = '';
 
   try {
@@ -502,11 +580,13 @@ router.get('/channel-summary', async (req, res) => {
             WHEN doc_date >= date_trunc('month', CURRENT_DATE) 
               AND doc_date < (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month') 
               AND yeardoc = EXTRACT(YEAR FROM CURRENT_DATE)
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2025,
           COALESCE(SUM(CASE 
             WHEN doc_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 year') 
               AND doc_date < (date_trunc('month', CURRENT_DATE - INTERVAL '1 year') + INTERVAL '1 month') 
               AND yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2024
         FROM odg_sale_detail
         GROUP BY channel_name
@@ -519,11 +599,13 @@ router.get('/channel-summary', async (req, res) => {
             WHEN doc_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month') 
               AND doc_date < date_trunc('month', CURRENT_DATE)
               AND yeardoc = EXTRACT(YEAR FROM CURRENT_DATE - INTERVAL '1 month')
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2025,
           COALESCE(SUM(CASE 
             WHEN doc_date >= date_trunc('month', CURRENT_DATE - INTERVAL '13 months') 
               AND doc_date < date_trunc('month', CURRENT_DATE - INTERVAL '12 months')
               AND yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2024
         FROM odg_sale_detail
         GROUP BY channel_name
@@ -535,10 +617,12 @@ router.get('/channel-summary', async (req, res) => {
           COALESCE(SUM(CASE 
             WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) 
               AND doc_date <= CURRENT_DATE
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2025,
           COALESCE(SUM(CASE 
             WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1 
               AND doc_date <= (CURRENT_DATE - INTERVAL '1 year')
+              ${whereClause}
             THEN sum_amount ELSE 0 END), 0) AS total_2024
         FROM odg_sale_detail
         GROUP BY channel_name
@@ -547,22 +631,28 @@ router.get('/channel-summary', async (req, res) => {
     } else if (filter === 'fullYear') {
       query = `
         SELECT channel_name,
-          COALESCE(SUM(CASE WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) THEN sum_amount ELSE 0 END), 0) AS total_2025,
-          COALESCE(SUM(CASE WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1 THEN sum_amount ELSE 0 END), 0) AS total_2024
+          COALESCE(SUM(CASE 
+            WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) 
+              ${whereClause}
+            THEN sum_amount ELSE 0 END), 0) AS total_2025,
+          COALESCE(SUM(CASE 
+            WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1 
+              ${whereClause}
+            THEN sum_amount ELSE 0 END), 0) AS total_2024
         FROM odg_sale_detail
         GROUP BY channel_name
         ORDER BY total_2025 DESC;
       `;
     }
 
-    const result = await pool.query(query);
+    const result = await pool.query(query, params);
     res.json({ list: result.rows });
   } catch (err) {
     console.error('Error fetching channel summary:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
-
 });
+
 router.get('/top-item-brands', async (req, res) => {
   const filter = req.query.filter || 'thisMonth';
   const bu = req.query.bu || 'all';
@@ -663,12 +753,13 @@ router.get('/top-salespersons', async (req, res) => {
   const filter = req.query.filter || 'thisMonth';
   const bu = req.query.bu || 'all';
   const channel = req.query.channel || 'all';
+  const area = req.query.area || 'all'; // area filter
 
   let conditions = [];
   let params = [];
 
   // Filter BU
-  if (bu.toLowerCase() !== 'all') {
+  if (String(bu).toLowerCase() !== 'all') {
     params.push(bu);
     conditions.push(`bu_code = $${params.length}`);
   }
@@ -677,6 +768,12 @@ router.get('/top-salespersons', async (req, res) => {
   if (channel.toLowerCase() !== 'all') {
     params.push(channel);
     conditions.push(`channel_name = $${params.length}`);
+  }
+
+  // ✅ Filter Area (adjust column if needed, e.g., area_code, zone_code)
+  if (area.toLowerCase() !== 'all') {
+    params.push(area);
+    conditions.push(`area_code = $${params.length}`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -742,8 +839,12 @@ router.get('/top-salespersons', async (req, res) => {
     } else if (filter === 'fullYear') {
       query = `
         SELECT salename,
-          COALESCE(SUM(CASE WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) THEN sum_amount ELSE 0 END), 0) AS total_2025,
-          COALESCE(SUM(CASE WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1 THEN sum_amount ELSE 0 END), 0) AS total_2024
+          COALESCE(SUM(CASE 
+            WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE)
+            THEN sum_amount ELSE 0 END), 0) AS total_2025,
+          COALESCE(SUM(CASE 
+            WHEN yeardoc = EXTRACT(YEAR FROM CURRENT_DATE) - 1
+            THEN sum_amount ELSE 0 END), 0) AS total_2024
         FROM odg_sale_detail
         ${whereClause}
         GROUP BY salename
@@ -755,8 +856,8 @@ router.get('/top-salespersons', async (req, res) => {
     const result = await pool.query(query, params);
     res.json({ list: result.rows });
   } catch (err) {
-    console.error('Error fetching top salespersons:', err);
-    res.status(500).json({ message: 'Internal server error' });
+    console.error('Error fetching top salespersons:', err.message);
+    res.status(500).json({ message: 'Internal server error', error: err.message });
   }
 });
 
@@ -1354,8 +1455,20 @@ router.get('/newcustomer', async (req, res) => {
 });
 router.get('/province', async (req, res) => {
   try {
-    const { bu_code } = req.query;  // รับ bu_code จาก query string
-    const buCondition = bu_code ? `AND bu_code = '${bu_code}'` : '';
+    const { bu_code } = req.query;
+    const isFilterBU = bu_code && bu_code.toLowerCase() !== 'all';
+
+    let buWhere = '';
+    const params1 = [];
+    const params2 = [];
+    const params3 = [];
+
+    if (isFilterBU) {
+      buWhere = `AND bu_code = $1`;
+      params1.push(bu_code);
+      params2.push(bu_code);
+      params3.push(bu_code);
+    }
 
     const thisMonthQuery = `
       SELECT province_name,
@@ -1364,7 +1477,7 @@ router.get('/province', async (req, res) => {
       FROM odg_sale_detail
       WHERE yeardoc IN ('2025', '2024') 
         AND monthdoc = TO_CHAR(current_date, 'MM')::int
-        ${buCondition}
+        ${buWhere}
       GROUP BY province_name
       ORDER BY this_year DESC;
     `;
@@ -1376,7 +1489,7 @@ router.get('/province', async (req, res) => {
       FROM odg_sale_detail
       WHERE yeardoc IN ('2025', '2024') 
         AND monthdoc = TO_CHAR(current_date, 'MM')::int - 1
-        ${buCondition}
+        ${buWhere}
       GROUP BY province_name
       ORDER BY this_year DESC;
     `;
@@ -1387,15 +1500,15 @@ router.get('/province', async (req, res) => {
         SUM(CASE WHEN yeardoc = '2024' THEN sum_amount ELSE 0 END) AS last_year
       FROM odg_sale_detail
       WHERE yeardoc IN ('2025', '2024')
-        ${buCondition}
+        ${buWhere}
       GROUP BY province_name
       ORDER BY this_year DESC;
     `;
 
     const [thisMonth, lastMonth, fullyear] = await Promise.all([
-      pool.query(thisMonthQuery),
-      pool.query(lastMonthQuery),
-      pool.query(fullYearQuery)
+      pool.query(thisMonthQuery, params1),
+      pool.query(lastMonthQuery, params2),
+      pool.query(fullYearQuery, params3)
     ]);
 
     res.json({
@@ -1405,10 +1518,12 @@ router.get('/province', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Error fetching province sales:', err);
+    console.error('❌ Error fetching province sales:', err);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
+
+
 router.get('/salemap', async (req, res) => {
   try {
     const { bu } = req.query; // รับ bu จาก query string
